@@ -1,7 +1,6 @@
 import httpx
 
-from app.config import get_settings
-from app.services.telephony.base import CallConnection, TelephonyProvider
+from app.services.telephony.base import TelephonyProvider
 from app.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -10,57 +9,53 @@ TWILIO_API = "https://api.twilio.com/2010-04-01"
 
 
 class TwilioTelephony(TelephonyProvider):
-    def __init__(self) -> None:
-        settings = get_settings()
-        self.account_sid = settings.twilio_account_sid
-        self.auth_token = settings.twilio_auth_token
-        self.from_number = settings.twilio_phone_number
+    """Twilio telephony provider using per-tenant credentials."""
 
-    async def initiate_call(
-        self,
-        to_number: str,
-        from_number: str,
-        webhook_url: str,
-    ) -> CallConnection:
+    def __init__(self, account_sid: str, auth_token: str, phone_number: str) -> None:
+        self.account_sid = account_sid
+        self.auth_token = auth_token
+        self.from_number = phone_number
+
+    async def initiate_call(self, to_number: str, webhook_url: str) -> str:
         url = f"{TWILIO_API}/Accounts/{self.account_sid}/Calls.json"
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
+            response = await client.post(
                 url,
                 auth=(self.account_sid, self.auth_token),
                 data={
                     "To": to_number,
-                    "From": from_number or self.from_number,
+                    "From": self.from_number,
                     "Url": webhook_url,
+                    "Method": "GET",
                 },
+                timeout=15,
             )
-            resp.raise_for_status()
-            data = resp.json()
+            response.raise_for_status()
+            data = response.json()
+            call_sid = data.get("sid", "")
+            log.info("twilio_call_initiated", to=to_number, sid=call_sid)
+            return call_sid
 
-        log.info("twilio_call_initiated", call_sid=data["sid"], to=to_number)
-        return CallConnection(
-            call_sid=data["sid"],
-            from_number=data.get("from", from_number),
-            to_number=to_number,
-            status=data.get("status", "queued"),
-        )
-
-    async def end_call(self, call_sid: str) -> bool:
-        url = f"{TWILIO_API}/Accounts/{self.account_sid}/Calls/{call_sid}.json"
+    async def end_call(self, call_id: str) -> bool:
+        url = f"{TWILIO_API}/Accounts/{self.account_sid}/Calls/{call_id}.json"
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
+            response = await client.post(
                 url,
                 auth=(self.account_sid, self.auth_token),
                 data={"Status": "completed"},
+                timeout=10,
             )
-        log.info("twilio_call_ended", call_sid=call_sid, status=resp.status_code)
-        return resp.status_code == 200
+            ok = response.status_code == 200
+            log.info("twilio_call_ended", call_id=call_id, ok=ok)
+            return ok
 
-    async def get_call_status(self, call_sid: str) -> str:
-        url = f"{TWILIO_API}/Accounts/{self.account_sid}/Calls/{call_sid}.json"
+    async def get_call_status(self, call_id: str) -> str:
+        url = f"{TWILIO_API}/Accounts/{self.account_sid}/Calls/{call_id}.json"
         async with httpx.AsyncClient() as client:
-            resp = await client.get(
+            response = await client.get(
                 url,
                 auth=(self.account_sid, self.auth_token),
+                timeout=10,
             )
-            resp.raise_for_status()
-            return resp.json().get("status", "unknown")
+            response.raise_for_status()
+            return response.json().get("status", "unknown")

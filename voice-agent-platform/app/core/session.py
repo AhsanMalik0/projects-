@@ -8,6 +8,17 @@ class CallSession:
     tenant_id: str
     call_id: str = field(default_factory=lambda: f"call_{uuid.uuid4().hex[:12]}")
     persona_prompt: str = "You are a helpful AI voice assistant."
+
+    # Campaign & contact linkage (set when call is campaign-triggered)
+    campaign_id: str | None = None
+    contact_id: str | None = None
+
+    # Escalation tracking
+    escalation_triggers: list[str] = field(default_factory=list)
+    escalation_detected: bool = False
+    escalation_trigger_phrase: str | None = None
+
+    # Conversation state
     messages: list[dict[str, str]] = field(default_factory=list)
     entities: dict[str, str] = field(default_factory=dict)
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -26,3 +37,8 @@ class CallSession:
             role = msg["role"].upper()
             lines.append(f"{role}: {msg['content']}")
         return "\n".join(lines)
+
+    def flag_escalation(self, trigger_phrase: str) -> None:
+        """Mark this session as having detected a hot lead signal."""
+        self.escalation_detected = True
+        self.escalation_trigger_phrase = trigger_phrase

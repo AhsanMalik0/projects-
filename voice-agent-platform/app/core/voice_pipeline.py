@@ -43,7 +43,10 @@ class VoicePipeline:
         transcript = await self.stt.transcribe(audio)
         log.info("stt_result", text=transcript)
 
-        # 2. Guardrails check (flag-gated)
+        # 2. Escalation detection (runs before guardrails so AI responds correctly)
+        self._check_escalation(transcript)
+
+        # 3. Guardrails check (flag-gated)
         if self.flags.enabled("FLAG_LLM_GUARDRAILS"):
             lower = transcript.lower()
             for phrase in GUARDRAIL_BLOCK_PHRASES:
@@ -118,6 +121,32 @@ class VoicePipeline:
         # 8. TTS
         audio_response = await self.tts.synthesise(response_text)
         return audio_response
+
+    def _check_escalation(self, transcript: str) -> bool:
+        """Check customer utterance against campaign escalation triggers.
+
+        Sets session.escalation_detected = True on first match and records
+        the exact trigger phrase. Simple substring matching — no ML needed
+        because the business owner defines the exact phrases to watch for.
+        """
+        if not self.session.escalation_triggers:
+            return False
+        if self.session.escalation_detected:
+            # Already flagged this session — no need to re-check
+            return True
+        lower = transcript.lower()
+        for trigger in self.session.escalation_triggers:
+            if trigger.lower() in lower:
+                self.session.flag_escalation(transcript)
+                log.info(
+                    "escalation_detected",
+                    trigger=trigger,
+                    phrase=transcript[:120],
+                    campaign_id=self.session.campaign_id,
+                    contact_id=self.session.contact_id,
+                )
+                return True
+        return False
 
     def _build_system_prompt(self, chunks: list[str]) -> str:
         parts = [self.session.persona_prompt]
